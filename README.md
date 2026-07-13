@@ -1,5 +1,7 @@
 NetProbe: Professional Network Diagnostic Tool
 NetProbe is a powerful, Matrix-themed network analysis and diagnostic utility for Android. Designed for IT professionals, security researchers, and power users, it provides a comprehensive suite of tools to map local networks, identify connected hardware, and perform deep-dive host investigations—all within a high-performance, parallelized environment.
+
+
 🚀 Key Features
 1. Live Network Overview
 •
@@ -40,6 +42,8 @@ Concurrency: Kotlin Coroutines & Flow (For high-speed, non-blocking network oper
 Architecture: MVVM (Model-View-ViewModel) for clean separation of concerns
 •
 Networking: Low-level Socket API, InetAddress, and Runtime Process execution for shell-level precision.
+
+
 🛡 Security & Privacy
 NetProbe is built with security as a priority, featuring:
 •
