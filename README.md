@@ -45,6 +45,7 @@ Networking: Low-level Socket API, InetAddress, and Runtime Process execution for
 
 
 🛡 Security & Privacy
+
 NetProbe is built with security as a priority, featuring:
 •
 Strict Input Sanitization: Prevents shell command injection vulnerabilities.
