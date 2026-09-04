@@ -1,7 +1,7 @@
 package com.brutiful.netprobe.network
 
-import android.util.Log
 import com.brutiful.netprobe.model.*
+import com.brutiful.netprobe.util.NetProbeLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -17,8 +17,10 @@ object WhoisClient {
     private const val BOOTSTRAP_DOMAIN = "https://rdap.org/domain/"
 
     suspend fun fetchReport(query: String): WhoisReport = withContext(Dispatchers.IO) {
+        var currentType = TargetType.UNKNOWN
         try {
             val type = detectTargetType(query)
+            currentType = type
             if (isPrivateAddress(query, type)) {
                 return@withContext WhoisReport(query, type, isPrivate = true)
             }
@@ -38,10 +40,10 @@ object WhoisClient {
                 )
             }
 
-            WhoisReport(query, type, errorMessage = "Could not fetch data for $query")
+            WhoisReport(query, type, errorMessage = "Could not fetch data for specialized query")
         } catch (e: Exception) {
-            Log.e(TAG, "Fetch failed", e)
-            WhoisReport(query, TargetType.UNKNOWN, errorMessage = e.message)
+            NetProbeLog.e(TAG, "Fetch failed for query type ${currentType.name}")
+            WhoisReport(query, currentType, errorMessage = "Fetch failed")
         }
     }
 
@@ -75,7 +77,7 @@ object WhoisClient {
         var redirects = 0
         
         while (redirects < 5) {
-            Log.d(TAG, "Querying RDAP: $currentUrl")
+            NetProbeLog.d(TAG, "Querying RDAP for type ${type.name}")
             val connection = (URL(currentUrl).openConnection() as HttpURLConnection).apply {
                 connectTimeout = 5000
                 readTimeout = 5000
@@ -100,10 +102,7 @@ object WhoisClient {
     private fun parseRdapResponse(query: String, type: TargetType, jsonStr: String): WhoisReport {
         val json = try { JSONObject(jsonStr) } catch (_: Exception) { return WhoisReport(query, type, errorMessage = "Invalid JSON") }
         
-        val keys = json.keys()
-        val keyList = mutableListOf<String>()
-        while (keys.hasNext()) keyList.add(keys.next())
-        Log.d(TAG, "RDAP response keys for $query: $keyList")
+        NetProbeLog.d(TAG, "Parsing RDAP response for type ${type.name}")
 
         return when (type) {
             TargetType.DOMAIN -> parseDomainRdap(query, json, jsonStr)
@@ -137,7 +136,6 @@ object WhoisClient {
                 if (nsName.isNotEmpty()) nameservers.add(nsName)
             }
         }
-        Log.d(TAG, "Found ${nameservers.size} nameservers")
 
         // Status
         json.optJSONArray("status")?.let { sArray ->
@@ -145,7 +143,6 @@ object WhoisClient {
                 statusList.add(sArray.getString(i))
             }
         }
-        Log.d(TAG, "Found ${statusList.size} status entries")
 
         // Events
         json.optJSONArray("events")?.let { eArray ->
@@ -163,7 +160,6 @@ object WhoisClient {
                 }
             }
         }
-        Log.d(TAG, "Found ${events.size} events")
 
         // DNSSEC
         json.optJSONObject("secureDNS")?.let { dns ->
@@ -179,7 +175,6 @@ object WhoisClient {
                 entities.add(parseEntity(eArray.getJSONObject(i)))
             }
         }
-        Log.d(TAG, "Found ${entities.size} entities")
 
         // Notices
         json.optJSONArray("notices")?.let { nArray ->
@@ -252,8 +247,6 @@ object WhoisClient {
             for (i in 0 until rArray.length()) roles.add(rArray.getString(i))
         }
         
-        Log.d(TAG, "Parsing entity $handle with roles $roles")
-
         var name: String? = null
         var org: String? = null
         var email: String? = null

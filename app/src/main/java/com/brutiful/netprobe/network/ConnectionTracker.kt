@@ -3,37 +3,63 @@ package com.brutiful.netprobe.network
 import android.content.Context
 import android.net.ConnectivityManager
 import android.os.Build
-import android.util.Log
 import com.brutiful.netprobe.model.ConnectionHistory
 import com.brutiful.netprobe.model.ConnectionStatus
 import com.brutiful.netprobe.model.LiveConnection
+import com.brutiful.netprobe.util.NetProbeLog
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.util.concurrent.ConcurrentHashMap
 
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
+
 object ConnectionTracker {
-    private val _activeConnections = MutableStateFlow<Map<String, LiveConnection>>(emptyMap())
-    val activeConnections = _activeConnections.asStateFlow().map { currentMap ->
-        currentMap.values.toList().sortedWith(
-            compareByDescending<LiveConnection> { it.status == ConnectionStatus.ACTIVE }
-                .thenByDescending { it.sentBytes + it.receivedBytes }
-                .thenByDescending { it.totalPackets }
-                .thenByDescending { it.lastSeen }
-        )
+    private val connectionMap = ConcurrentHashMap<String, LiveConnection>()
+    private val structuralUpdates = MutableSharedFlow<Unit>(replay = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+    
+    private val ticker = flow {
+        while (true) {
+            delay(1000)
+            emit(Unit)
+        }
     }
 
-    val trackedCount: Int get() = _activeConnections.value.size
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    val activeConnections: StateFlow<List<LiveConnection>> = 
+        merge(structuralUpdates, ticker)
+            .onStart { emit(Unit) }
+            .map {
+                connectionMap.values.toList().sortedWith(
+                    compareByDescending<LiveConnection> { it.status == ConnectionStatus.ACTIVE }
+                        .thenByDescending { it.sentBytes + it.receivedBytes }
+                        .thenByDescending { it.totalPackets }
+                        .thenByDescending { it.lastSeen }
+                )
+            }
+            .stateIn(scope, SharingStarted.Eagerly, emptyList())
+
+    val trackedCount: Int get() = connectionMap.size
     
     private val hostNameCache = ConcurrentHashMap<String, String>()
     private val pendingMetadataResolutions = ConcurrentHashMap<String, Job>()
     private var ownerResolver: ConnectionOwnerResolver? = null
     
     private var database: HistoryDatabase? = null
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var appContext: Context? = null
     private var inactivityJob: Job? = null
+
+    // DB Batching
+    private val persistenceQueue = Channel<PersistenceAction>(10000, BufferOverflow.DROP_OLDEST)
+
+    sealed class PersistenceAction {
+        data class UpdateLive(val connection: LiveConnection) : PersistenceAction()
+        data class InsertHistory(val history: ConnectionHistory) : PersistenceAction()
+        object Flush : PersistenceAction()
+    }
 
     fun init(context: Context) {
         appContext = context.applicationContext
@@ -42,24 +68,64 @@ object ConnectionTracker {
         
         scope.launch {
             val saved = database?.liveConnectionDao()?.getAll() ?: emptyList()
-            _activeConnections.update { current ->
-                val newMap = current.toMutableMap()
-                saved.forEach { conn ->
-                    // When loading from DB, mark as INACTIVE initially
-                    newMap[conn.id] = conn.copy(status = ConnectionStatus.INACTIVE)
-                }
-                newMap
+            saved.forEach { conn ->
+                connectionMap[conn.id] = conn.copy(status = ConnectionStatus.INACTIVE)
             }
+            structuralUpdates.emit(Unit)
         }
         
         startInactivityChecker()
+        startPersistenceWorker()
+    }
+
+    private fun startPersistenceWorker() {
+        scope.launch {
+            val liveUpdates = mutableMapOf<String, LiveConnection>()
+            val historyInserts = mutableListOf<ConnectionHistory>()
+
+            suspend fun flush() {
+                val db = database ?: return
+                if (liveUpdates.isNotEmpty()) {
+                    val list = liveUpdates.values.toList()
+                    db.liveConnectionDao().insertAll(list)
+                    liveUpdates.clear()
+                }
+                if (historyInserts.isNotEmpty()) {
+                    val list = historyInserts.toList()
+                    db.historyDao().insertAll(list)
+                    historyInserts.clear()
+                }
+            }
+
+            while (isActive) {
+                try {
+                    val action = withTimeoutOrNull(3000) { persistenceQueue.receive() }
+                    if (action == null || action is PersistenceAction.Flush) {
+                        flush()
+                        continue
+                    }
+
+                    when (action) {
+                        is PersistenceAction.UpdateLive -> liveUpdates[action.connection.id] = action.connection
+                        is PersistenceAction.InsertHistory -> historyInserts.add(action.history)
+                        else -> {}
+                    }
+
+                    if (liveUpdates.size > 100 || historyInserts.size > 100) {
+                        flush()
+                    }
+                } catch (e: Exception) {
+                    NetProbeLog.e("ConnectionTracker", "Persistence worker error")
+                }
+            }
+        }
     }
 
     private fun startInactivityChecker() {
         inactivityJob?.cancel()
         inactivityJob = scope.launch {
             while (isActive) {
-                delay(10000) // Check every 10 seconds
+                delay(10000)
                 checkInactivity()
             }
         }
@@ -67,22 +133,18 @@ object ConnectionTracker {
 
     private fun checkInactivity() {
         val now = System.currentTimeMillis()
-        val timeout = 30000 // 30 seconds of no traffic = INACTIVE
+        val timeout = 30000 
         
-        _activeConnections.update { current ->
-            var changed = false
-            val updatedMap = current.mapValues { (_, conn) ->
-                if (conn.status == ConnectionStatus.ACTIVE && now - conn.lastSeen > timeout) {
-                    changed = true
-                    val inactiveConn = conn.copy(status = ConnectionStatus.INACTIVE)
-                    persistLiveConnection(inactiveConn)
-                    inactiveConn
-                } else {
-                    conn
-                }
+        var changed = false
+        connectionMap.forEach { (key, conn) ->
+            if (conn.status == ConnectionStatus.ACTIVE && now - conn.lastSeen > timeout) {
+                val inactive = conn.copy(status = ConnectionStatus.INACTIVE)
+                connectionMap[key] = inactive
+                persistenceQueue.trySend(PersistenceAction.UpdateLive(inactive))
+                changed = true
             }
-            if (changed) updatedMap else current
         }
+        if (changed) structuralUpdates.tryEmit(Unit)
     }
 
     fun updateConnection(
@@ -97,16 +159,12 @@ object ConnectionTracker {
         val flowKey = "$srcIp:$srcPort:$destIp:$destPort:$protocol"
         val now = System.currentTimeMillis()
 
-        _activeConnections.update { current ->
-            val existing = current[flowKey]
-            
-            val live = if (existing == null) {
+        var isNew = false
+        val live = connectionMap.compute(flowKey) { _, existing ->
+            if (existing == null) {
+                isNew = true
                 val uid = getOwnerUid(protocol, srcIp, srcPort, destIp, destPort)
                 val cachedMetadata = if (uid != -1) ownerResolver?.getCachedMetadata(uid) else null
-                
-                // Diagnostic log for first-seen
-                Log.d("ConnectionTracker", "First seen: $flowKey, UID: $uid, Cached: ${cachedMetadata?.label ?: "no"}")
-
                 val initialLabel = cachedMetadata?.label ?: if (uid != -1) "Resolving..." else "Unknown app"
                 
                 LiveConnection(
@@ -125,9 +183,8 @@ object ConnectionTracker {
                     totalPackets = 1,
                     status = ConnectionStatus.ACTIVE
                 ).also {
-                    if (uid != -1 && cachedMetadata == null) {
-                        resolveMetadataAsync(flowKey, uid)
-                    }
+                    // Start async resolution. It handles retries if uid is -1.
+                    resolveMetadataAsync(flowKey, uid, protocol, srcIp, srcPort, destIp, destPort)
                 }
             } else {
                 existing.copy(
@@ -139,11 +196,30 @@ object ConnectionTracker {
                     destinationHost = hostNameCache[destIp] ?: existing.destinationHost
                 )
             }
+        }!!
 
-            saveToHistory(srcIp, srcPort, live, bytes, isSent)
-            persistLiveConnection(live)
-            current + (flowKey to live)
+        if (isNew) {
+            structuralUpdates.tryEmit(Unit)
         }
+
+        // Add to history and update live connection
+        val history = ConnectionHistory(
+            timestamp = now,
+            sourceIp = srcIp,
+            sourcePort = srcPort,
+            destinationIp = live.destinationIp,
+            destinationPort = live.destinationPort,
+            protocol = live.protocol,
+            uid = live.uid,
+            packageName = live.packageName,
+            appLabel = live.appLabel,
+            destinationHost = live.destinationHost,
+            sentBytes = if (isSent) bytes.toLong() else 0,
+            receivedBytes = if (!isSent) bytes.toLong() else 0
+        )
+        
+        persistenceQueue.trySend(PersistenceAction.UpdateLive(live))
+        persistenceQueue.trySend(PersistenceAction.InsertHistory(history))
 
         if (!hostNameCache.containsKey(destIp)) {
             resolveHostName(destIp)
@@ -162,62 +238,68 @@ object ConnectionTracker {
         }
     }
 
-    private fun resolveMetadataAsync(flowKey: String, uid: Int) {
+    private fun resolveMetadataAsync(
+        flowKey: String,
+        initialUid: Int,
+        protocol: String? = null,
+        srcIp: String? = null,
+        srcPort: Int = 0,
+        destIp: String? = null,
+        destPort: Int = 0
+    ) {
         if (pendingMetadataResolutions.containsKey(flowKey)) return
 
         val job = scope.launch {
             try {
-                val metadata = withTimeoutOrNull(5000) {
-                    ownerResolver?.resolveMetadata(uid)
+                var currentUid = initialUid
+
+                // If UID is unknown, try a few retries with delays (Experimental fallback)
+                if (currentUid == -1 && protocol != null && srcIp != null && destIp != null) {
+                    val retryDelays = listOf(500L, 1000L)
+                    for (delayMs in retryDelays) {
+                        delay(delayMs)
+                        currentUid = getOwnerUid(protocol, srcIp, srcPort, destIp, destPort)
+                        if (currentUid != -1) {
+                            NetProbeLog.d("ConnectionTracker", "Late UID resolution success: $currentUid for $flowKey")
+                            break
+                        }
+                    }
                 }
 
-                _activeConnections.update { current ->
-                    val existing = current[flowKey]
-                    if (existing != null && metadata != null) {
-                        val updated = existing.copy(
-                            packageName = metadata.packageName,
-                            appLabel = metadata.label
-                        )
-                        Log.d("ConnectionTracker", "Updated metadata for $flowKey: ${metadata.label}")
-                        persistLiveConnection(updated)
-                        current + (flowKey to updated)
-                    } else if (existing != null && existing.appLabel == "Resolving...") {
-                        // Cleanup Resolving... if failed/timeout
-                        val fallback = existing.copy(appLabel = "UID $uid")
-                        persistLiveConnection(fallback)
-                        current + (flowKey to fallback)
+                if (currentUid != -1) {
+                    val metadata = withTimeoutOrNull(5000) {
+                        ownerResolver?.resolveMetadata(currentUid)
+                    }
+
+                    if (metadata != null) {
+                        connectionMap.computeIfPresent(flowKey) { _, existing ->
+                            existing.copy(
+                                uid = currentUid,
+                                packageName = metadata.packageName,
+                                appLabel = metadata.label
+                            ).also { updated ->
+                                persistenceQueue.trySend(PersistenceAction.UpdateLive(updated))
+                            }
+                        }
+                        structuralUpdates.emit(Unit)
                     } else {
-                        current
+                        connectionMap.computeIfPresent(flowKey) { _, existing ->
+                            if (existing.appLabel == "Resolving...") {
+                                existing.copy(uid = currentUid, appLabel = "UID $currentUid").also { updated ->
+                                    persistenceQueue.trySend(PersistenceAction.UpdateLive(updated))
+                                }
+                            } else existing
+                        }
+                        structuralUpdates.emit(Unit)
                     }
                 }
             } catch (e: Exception) {
-                Log.e("ConnectionTracker", "Async metadata resolution failed", e)
+                NetProbeLog.e("ConnectionTracker", "Async metadata resolution failed")
             } finally {
                 pendingMetadataResolutions.remove(flowKey)
             }
         }
         pendingMetadataResolutions[flowKey] = job
-    }
-
-    private fun saveToHistory(srcIp: String?, srcPort: Int, live: LiveConnection, bytes: Int, isSent: Boolean) {
-        val db = database ?: return
-        scope.launch {
-            val history = ConnectionHistory(
-                timestamp = System.currentTimeMillis(),
-                sourceIp = srcIp,
-                sourcePort = srcPort,
-                destinationIp = live.destinationIp,
-                destinationPort = live.destinationPort,
-                protocol = live.protocol,
-                uid = live.uid,
-                packageName = live.packageName,
-                appLabel = live.appLabel,
-                destinationHost = live.destinationHost,
-                sentBytes = if (isSent) bytes.toLong() else 0,
-                receivedBytes = if (!isSent) bytes.toLong() else 0
-            )
-            db.historyDao().insert(history)
-        }
     }
 
     private fun resolveHostName(ip: String) {
@@ -226,15 +308,16 @@ object ConnectionTracker {
                 val host = InetAddress.getByName(ip).hostName
                 if (host != ip) {
                     hostNameCache[ip] = host
-                    _activeConnections.update { current ->
-                        current.mapValues { (key, conn) ->
-                            if (conn.destinationIp == ip) {
-                                val updated = conn.copy(destinationHost = host)
-                                persistLiveConnection(updated)
-                                updated
-                            } else conn
+                    var changed = false
+                    connectionMap.forEach { (key, conn) ->
+                        if (conn.destinationIp == ip) {
+                            val updated = conn.copy(destinationHost = host)
+                            connectionMap[key] = updated
+                            persistenceQueue.trySend(PersistenceAction.UpdateLive(updated))
+                            changed = true
                         }
                     }
+                    if (changed) structuralUpdates.emit(Unit)
                 }
             } catch (_: Exception) {
                 hostNameCache[ip] = "Unknown Host"
@@ -242,30 +325,27 @@ object ConnectionTracker {
         }
     }
 
-    private fun persistLiveConnection(connection: LiveConnection) {
-        val db = database ?: return
-        scope.launch {
-            db.liveConnectionDao().insert(connection)
-        }
-    }
-
     fun clearAll() {
         scope.launch {
+            persistenceQueue.send(PersistenceAction.Flush)
             database?.liveConnectionDao()?.deleteAllConnections()
             database?.historyDao()?.deleteAllHistory()
             PacketRepository.deleteAllPackets()
-            _activeConnections.value = emptyMap()
+            connectionMap.clear()
             ownerResolver?.clearCache()
             hostNameCache.clear()
+            structuralUpdates.emit(Unit)
         }
     }
 
-    fun clearOldConnections() {
-        // No-op or keep for API compatibility but disable pruning
-        // In the new requirement, we don't clear them, we just mark them INACTIVE.
+    fun flushAndShutdown() {
+        persistenceQueue.trySend(PersistenceAction.Flush)
+        // Give it a moment
     }
 
     fun getAppIcon(packageName: String?): android.graphics.drawable.Drawable? {
         return ownerResolver?.getIcon(packageName)
     }
+
+    fun getActiveConnection(key: String): LiveConnection? = connectionMap[key]
 }

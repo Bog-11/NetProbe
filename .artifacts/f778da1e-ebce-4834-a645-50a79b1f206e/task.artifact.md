@@ -1,0 +1,3 @@
+- [x] Update header text and card style in `NetworkOverviewScreen.kt`
+- [x] Update dividers to primary theme in `NetworkOverviewScreen.kt`
+- [x] Create walkthrough artifact

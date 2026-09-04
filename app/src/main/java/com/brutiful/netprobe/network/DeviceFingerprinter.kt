@@ -117,6 +117,58 @@ object DeviceFingerprinter {
             evidence["Heuristic"] = "Network Vendor Matched"
         }
 
+        // 5. Apple Device Refinement
+        val isAppleVendor = device.vendorName?.contains("Apple", ignoreCase = true) == true
+        val appleEvidence = device.evidence.values.any { 
+            it.contains("Apple", ignoreCase = true) || 
+            it.contains("iPhone", ignoreCase = true) || 
+            it.contains("iPad", ignoreCase = true) 
+        }
+        
+        if (isAppleVendor || appleEvidence) {
+            val hasAirPlay = device.openPorts.contains(7000) || device.evidence.values.any { it.contains("_airplay", ignoreCase = true) }
+            val hasAppleTvV2 = device.evidence.values.any { it.contains("_appletv-v2", ignoreCase = true) }
+            val hasRaop = device.evidence.values.any { it.contains("_raop", ignoreCase = true) }
+            
+            // Only refine if we don't have a high-confidence specialized type already
+            val isSpecialized = updated.deviceType in listOf("Printer", "IP Camera", "Smart TV", "Smart Hub")
+            
+            if (!isSpecialized) {
+                if (hasAppleTvV2 || (isAppleVendor && hasAirPlay && device.openPorts.contains(3689))) {
+                    updated = updated.copy(
+                        deviceType = "Apple TV",
+                        confidenceScore = maxOf(updated.confidenceScore, 90)
+                    )
+                    evidence["Heuristic"] = "Apple TV Pattern"
+                } else if (hasRaop) {
+                    updated = updated.copy(
+                        deviceType = "HomePod / Apple Audio",
+                        confidenceScore = maxOf(updated.confidenceScore, 80)
+                    )
+                    evidence["Heuristic"] = "Apple Audio Pattern"
+                } else if (isAppleVendor && updated.deviceType == null) {
+                    updated = updated.copy(
+                        deviceType = "Apple Device",
+                        confidenceScore = maxOf(updated.confidenceScore, 25)
+                    )
+                }
+            }
+        }
+
+        // 6. False Positive Protection
+        // If it's identified as an "iPhone" but has ONVIF or other non-mobile services, override it.
+        if (updated.hostName?.contains("iPhone", ignoreCase = true) == true) {
+            val hasOnvif = device.discoverySource == "ONVIF" || device.openPorts.contains(3702)
+            val hasIndustrialPorts = device.openPorts.any { it in listOf(502, 102, 44818) }
+            
+            if (hasOnvif || hasIndustrialPorts) {
+                evidence["Identity Warning"] = "Overriding mock iPhone hostname for specialized hardware"
+                if (hasOnvif && updated.deviceType == null) {
+                    updated = updated.copy(deviceType = "IP Camera", confidenceScore = 60)
+                }
+            }
+        }
+
         return updated.copy(evidence = evidence)
     }
 }

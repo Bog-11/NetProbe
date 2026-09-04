@@ -1,0 +1,4 @@
+- [x] Add `showClearConfirmation` state to `LiveConnectionsScreen`
+- [x] Add confirmation dialog composable/logic in `LiveConnectionsScreen`
+- [x] Update "Clear All" button `onClick` to show the dialog
+- [x] Verify changes by analyzing the file

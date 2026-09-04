@@ -53,6 +53,7 @@ fun LiveConnectionsScreen(
     var showExportChooser by remember { mutableStateOf(false) }
     var showExportInfo by remember { mutableStateOf<ExportMode?>(null) }
     var showSecurityWarning by remember { mutableStateOf(false) }
+    var showClearConfirmation by remember { mutableStateOf(false) }
 
     val pcapLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/vnd.tcpdump.pcap")
@@ -70,6 +71,30 @@ fun LiveConnectionsScreen(
             onConfirm = {
                 showSecurityWarning = false
                 onToggleVpn()
+            }
+        )
+    }
+
+    if (showClearConfirmation) {
+        AlertDialog(
+            onDismissRequest = { showClearConfirmation = false },
+            title = { Text("Clear All Connections?") },
+            text = { Text("Are you sure you want to clear all captured traffic data? This action cannot be undone.") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        ConnectionTracker.clearAll()
+                        showClearConfirmation = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Clear")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearConfirmation = false }) {
+                    Text("Cancel")
+                }
             }
         )
     }
@@ -156,7 +181,7 @@ fun LiveConnectionsScreen(
                         }
                     }
 
-                    IconButton(onClick = { ConnectionTracker.clearAll() }) {
+                    IconButton(onClick = { showClearConfirmation = true }) {
                         Icon(Icons.Default.DeleteSweep, contentDescription = "Clear All", tint = MaterialTheme.colorScheme.error)
                     }
                 }
@@ -269,7 +294,8 @@ private fun SecurityWarningDialog(
         text = {
             Text(
                 "Starting the Traffic Monitor creates a local-only VPN on this device.\n\n" +
-                "Everything stays on your device: all monitoring is performed locally, and traffic data is stored privately and temporarily within the app itself. No data ever leaves your device, and nothing is sent to any external servers or third parties."
+                "Everything stays on your device: all monitoring is performed locally, and traffic data is stored privately and temporarily within the app itself. No data ever leaves your device, and nothing is sent to any external servers or third parties.\n\n" +
+                "Location permission is required for advanced Wi-Fi diagnostics, such as identifying your network SSID to help resolve device identities. This information is processed strictly on-device."
             )
         },
         confirmButton = {
@@ -360,7 +386,7 @@ fun ConnectionCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    val statusColor = if (connection.status == ConnectionStatus.ACTIVE) Color(0xFF4CAF50) else Color(0xFFF44336)
+                    val statusColor = if (connection.status == ConnectionStatus.ACTIVE) MaterialTheme.colorScheme.primary else Color(0xFFF44336)
                     Surface(
                         modifier = Modifier.size(8.dp),
                         shape = androidx.compose.foundation.shape.CircleShape,
@@ -390,7 +416,7 @@ fun ConnectionCard(
                 Text(
                     text = if (connection.status == ConnectionStatus.ACTIVE) "ACTIVE" else "INACTIVE",
                     style = MaterialTheme.typography.labelSmall,
-                    color = if (connection.status == ConnectionStatus.ACTIVE) Color(0xFF4CAF50) else Color(0xFFF44336),
+                    color = if (connection.status == ConnectionStatus.ACTIVE) MaterialTheme.colorScheme.primary else Color(0xFFF44336),
                     fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
                 )
             }

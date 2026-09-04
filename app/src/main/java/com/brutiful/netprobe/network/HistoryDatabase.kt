@@ -2,10 +2,11 @@ package com.brutiful.netprobe.network
 
 import android.content.Context
 import androidx.room.*
-import com.brutiful.netprobe.model.ConnectionHistory
-import com.brutiful.netprobe.model.DeviceIdentity
-import com.brutiful.netprobe.model.LiveConnection
+import com.brutiful.netprobe.model.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.launch
 
 @Dao
 interface LiveConnectionDao {
@@ -33,6 +34,9 @@ interface HistoryDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(history: ConnectionHistory)
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(history: List<ConnectionHistory>)
+
     @Query("SELECT * FROM connection_history ORDER BY timestamp DESC")
     fun getAllHistory(): Flow<List<ConnectionHistory>>
 
@@ -55,11 +59,27 @@ interface DeviceIdentityDao {
     suspend fun getByIp(ip: String): DeviceIdentity?
 }
 
-@Database(entities = [ConnectionHistory::class, DeviceIdentity::class, LiveConnection::class], version = 3, exportSchema = false)
+@Dao
+interface PortInfoDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(ports: List<PortInfo>)
+
+    @Query("SELECT * FROM port_info")
+    fun getAllFlow(): Flow<List<PortInfo>>
+
+    @Query("SELECT * FROM port_info")
+    suspend fun getAll(): List<PortInfo>
+
+    @Query("SELECT * FROM port_info WHERE port = :port")
+    suspend fun getByPort(port: Int): PortInfo?
+}
+
+@Database(entities = [ConnectionHistory::class, DeviceIdentity::class, LiveConnection::class, PortInfo::class], version = 4, exportSchema = false)
 abstract class HistoryDatabase : RoomDatabase() {
     abstract fun historyDao(): HistoryDao
     abstract fun deviceIdentityDao(): DeviceIdentityDao
     abstract fun liveConnectionDao(): LiveConnectionDao
+    abstract fun portInfoDao(): PortInfoDao
 
     companion object {
         @Volatile
@@ -73,7 +93,20 @@ abstract class HistoryDatabase : RoomDatabase() {
                 )
                 .fallbackToDestructiveMigration()
                 .build()
+                
                 INSTANCE = instance
+                
+                // Populate initial port data
+                CoroutineScope(Dispatchers.IO).launch {
+                    try {
+                        if (instance.portInfoDao().getAll().isEmpty()) {
+                            instance.portInfoDao().insertAll(PortData.initialPorts)
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+                
                 instance
             }
         }

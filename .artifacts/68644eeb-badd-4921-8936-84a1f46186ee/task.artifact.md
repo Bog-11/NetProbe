@@ -1,0 +1,22 @@
+# Task: SSH Stability and Performance Fixes
+
+- `[x]` Refactor `SshRepository.kt` for Host Key and PTY resizing
+    - `[x]` Replace busy-wait in `HostKeyVerifier` with `CompletableDeferred`
+    - `[x]` Add `updateWindowDimensions` method
+    - `[x]` Audit and fix `Dispatchers.IO` usage
+- `[x]` Update `SshSessionService.kt` for buffering and history
+    - `[x]` Define constants for history and buffering
+    - `[x]` Implement `StringBuilder` buffer with flush triggers (newline, size, timeout)
+    - `[x]` Implement line-bounded history (500 lines)
+    - `[x]` Add `resizePTY` method and expose through Binder
+- `[x]` Refactor `RemoteShellViewModel.kt` for robust binding
+    - `[x]` Implement `awaitBinding()` using `suspendCancellableCoroutine`
+    - `[x]` Remove brittle retry loop in `connect()`
+    - `[x]` Add `onResize` handler to forward dimensions to service
+- `[x]` Update `RemoteShellScreen.kt` for PTY resizing
+    - `[x]` Calculate terminal dimensions (cols/rows) using `BoxWithConstraints`
+    - `[x]` Trigger resize on layout changes
+- `[x]` Verification
+    - `[x]` Manual test: Connection reliability
+    - `[x]` Manual test: Output buffering & large output stability
+    - `[x]` Manual test: PTY resize with `top` command

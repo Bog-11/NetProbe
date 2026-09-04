@@ -56,6 +56,18 @@ class MdnsDiscoveryHelper(context: Context) {
                         val ip = resolvedInfo.host.hostAddress
                         val hostName = resolvedInfo.host.hostName
                         
+                        val txtRecords = mutableMapOf<String, String>()
+                        try {
+                            // attributes is a Map<String, ByteArray>
+                            resolvedInfo.attributes.forEach { (key, value) ->
+                                txtRecords[key] = String(value)
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error parsing TXT records for ${resolvedInfo.serviceName}", e)
+                        }
+
+                        Log.d(TAG, "Resolved mDNS Service: ${resolvedInfo.serviceName}, IP: $ip, TXT: $txtRecords")
+                        
                         val fingerprint = DeviceFingerprint(
                             source = FingerprintSource.MDNS,
                             friendlyName = resolvedInfo.serviceName,
@@ -65,7 +77,7 @@ class MdnsDiscoveryHelper(context: Context) {
                                 "ip" to ip,
                                 "serviceType" to resolvedInfo.serviceType,
                                 "host" to hostName
-                            )
+                            ) + txtRecords
                         )
                         synchronized(fingerprints) { fingerprints.add(fingerprint) }
                     }

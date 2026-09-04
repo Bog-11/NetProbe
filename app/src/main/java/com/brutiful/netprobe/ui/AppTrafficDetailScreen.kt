@@ -10,11 +10,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.FilterList
-import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.automirrored.filled.*
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -23,6 +20,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.brutiful.netprobe.model.*
@@ -211,7 +210,7 @@ fun PacketRow(packet: CapturedPacket, timeFormat: SimpleDateFormat, onClick: () 
         )
         
         val directionChar = if (packet.direction == PacketDirection.UPSTREAM) "↑" else "↓"
-        val directionColor = if (packet.direction == PacketDirection.UPSTREAM) Color(0xFF4CAF50) else Color(0xFF2196F3)
+        val directionColor = if (packet.direction == PacketDirection.UPSTREAM) MaterialTheme.colorScheme.primary else Color(0xFF2196F3)
         
         Text(
             directionChar,
@@ -223,7 +222,7 @@ fun PacketRow(packet: CapturedPacket, timeFormat: SimpleDateFormat, onClick: () 
         Column(modifier = Modifier.weight(1f)) {
             Text(packet.summary, style = MaterialTheme.typography.bodySmall)
             if (packet.decryptionStatus == DecryptionStatus.DECRYPTED) {
-                Text("Decrypted", style = MaterialTheme.typography.labelSmall, color = Color(0xFF4CAF50))
+                Text("Decrypted", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
             }
         }
         
@@ -282,11 +281,68 @@ fun PacketDetailDialog(
 
 @Composable
 fun PacketOverview(packet: CapturedPacket) {
-    val metadata = PacketParser.parsePacket(packet)
     Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-        metadata.forEach { (key, value) ->
-            DetailItem(key, value)
+        // Direction and Protocol Header
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+            ),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    val color = if (packet.direction == PacketDirection.UPSTREAM) MaterialTheme.colorScheme.primary else Color(0xFF2196F3)
+                    Icon(
+                        if (packet.direction == PacketDirection.UPSTREAM) Icons.Default.ArrowUpward else Icons.Default.ArrowDownward,
+                        contentDescription = null,
+                        tint = color
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = packet.protocol,
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                Text(
+                    text = if (packet.direction == PacketDirection.UPSTREAM) "Outgoing Traffic" else "Incoming Traffic",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // Path Visualization
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceEvenly
+        ) {
+            AddressBlock(label = "Source", ip = packet.sourceIp, port = packet.sourcePort)
+            Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, tint = MaterialTheme.colorScheme.outline)
+            AddressBlock(label = "Destination", ip = packet.destinationIp, port = packet.destinationPort)
+        }
+
+        Spacer(modifier = Modifier.height(32.dp))
+
+        // Basic Info Table
+        Text("Packet Details", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), thickness = 0.5.dp)
+        
+        DetailItem("Time Captured", SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault()).format(Date(packet.timestamp)))
+        DetailItem("Total Size", "${packet.length} bytes")
+        DetailItem("Brief Summary", packet.summary)
+    }
+}
+
+@Composable
+fun AddressBlock(label: String, ip: String, port: Int) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(ip, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold)
+        Text("Port $port", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
     }
 }
 
@@ -429,7 +485,7 @@ fun PacketRawView(bytes: ByteArray, onNotify: (String) -> Unit) {
                                     text = row.hex,
                                     fontFamily = FontFamily.Monospace,
                                     fontSize = 11.sp,
-                                    color = Color(0xFF00FF00),
+                                    color = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.width(360.dp)
                                 )
                                 Spacer(modifier = Modifier.width(12.dp))
@@ -437,7 +493,7 @@ fun PacketRawView(bytes: ByteArray, onNotify: (String) -> Unit) {
                                     text = row.ascii,
                                     fontFamily = FontFamily.Monospace,
                                     fontSize = 11.sp,
-                                    color = Color(0xFF4CAF50),
+                                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
                                     modifier = Modifier.width(120.dp)
                                 )
                             }
@@ -452,41 +508,176 @@ fun PacketRawView(bytes: ByteArray, onNotify: (String) -> Unit) {
 @Composable
 fun PacketParsedView(packet: CapturedPacket) {
     val metadata = PacketParser.parsePacket(packet)
-    if (metadata.containsKey("App Protocol")) {
-        Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-            Text("Protocol Analysis", style = MaterialTheme.typography.titleSmall)
-            Spacer(modifier = Modifier.height(8.dp))
-            metadata.forEach { (key, value) ->
+    // Filter out keys already shown in Overview
+    val appData = metadata.filterKeys { it !in listOf("Timestamp", "Protocol", "Source", "Destination", "Length") }
+    
+    Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+        if (appData.isNotEmpty()) {
+            Text("Protocol Analysis", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+            Spacer(modifier = Modifier.height(12.dp))
+            appData.forEach { (key, value) ->
                 DetailItem(key, value)
             }
+        } else {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 48.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        Icons.Default.Search,
+                        contentDescription = null,
+                        modifier = Modifier.size(48.dp),
+                        tint = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        "No application-level data detected.\nPayload may be encrypted or an unrecognized format.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        textAlign = TextAlign.Center,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
         }
-    } else {
-        Text("No advanced parsing available for this packet type.", style = MaterialTheme.typography.bodyMedium)
     }
 }
 
 @Composable
 fun PacketDecryptedView(packet: CapturedPacket) {
-    when (packet.decryptionStatus) {
-        DecryptionStatus.DECRYPTED -> {
-            if (packet.decryptedPayload != null) {
+    val metadata = PacketParser.parsePacket(packet)
+    val status = metadata["_decryption_status"] ?: packet.decryptionStatus.name
+    val bytes = packet.rawBytes
+    
+    // Calculate payload offset
+    val ihl = (bytes[0].toInt() and 0x0F) * 4
+    var payloadOffset = ihl
+    if (packet.protocol == "TCP" && bytes.size >= ihl + 20) {
+        payloadOffset += ((bytes[ihl + 12].toInt() shr 4) and 0x0F) * 4
+    } else if (packet.protocol == "UDP") {
+        payloadOffset += 8
+    }
+
+    val payload = if (payloadOffset < bytes.size) bytes.copyOfRange(payloadOffset, bytes.size) else null
+
+    Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+        when {
+            packet.decryptionStatus == DecryptionStatus.DECRYPTED -> {
                 Text(
-                    String(packet.decryptedPayload, StandardCharsets.UTF_8),
+                    String(packet.decryptedPayload ?: byteArrayOf(), StandardCharsets.UTF_8),
                     fontFamily = FontFamily.Monospace,
                     fontSize = 12.sp
                 )
-            } else {
-                Text("Decrypted payload is empty.")
+            }
+            status == "ENCRYPTED_NOT_DECRYPTED" -> {
+                EncryptionGuide(packet)
+            }
+            else -> {
+                // Try smart decoding for plaintext
+                val decoded = payload?.let { com.brutiful.netprobe.network.ContentDecoder.decodeSmart(it) }
+                if (decoded != null) {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)),
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp)
+                    ) {
+                        Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.AutoFixHigh, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Smart-Decoded Content", style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
+                    SelectionContainer {
+                        Text(
+                            text = decoded,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                } else {
+                    Box(
+                        modifier = Modifier.fillMaxWidth().padding(top = 48.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(Icons.Default.LockOpen, contentDescription = null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                "Traffic is not encrypted.\nNo special encoding (JSON/Base64) detected.\nCheck 'Parsed' tab for details.",
+                                textAlign = TextAlign.Center,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
             }
         }
-        DecryptionStatus.ENCRYPTED_NOT_DECRYPTED -> {
-            Text("Encrypted traffic. Decrypted payload not available.\n\nTLS MITM decryption is required to view this content.", color = MaterialTheme.colorScheme.error)
+    }
+}
+
+@Composable
+fun EncryptionGuide(packet: CapturedPacket) {
+    Column {
+        Card(
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.1f)),
+            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.2f)),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(modifier = Modifier.padding(16.dp)) {
+                Icon(Icons.Default.Lock, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                Spacer(modifier = Modifier.width(16.dp))
+                Column {
+                    Text("Traffic is Encrypted", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.error)
+                    Text(
+                        "This connection uses ${if (packet.destinationPort == 443) "HTTPS/TLS" else "an encrypted protocol"}. The contents cannot be read without a Man-in-the-Middle (MITM) setup.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
         }
-        DecryptionStatus.DECRYPTION_FAILED -> {
-            Text("Decryption failed.", color = MaterialTheme.colorScheme.error)
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        Text("How to decrypt this?", style = MaterialTheme.typography.titleMedium)
+        Spacer(modifier = Modifier.height(8.dp))
+        
+        GuideItem("1", "Install Root CA", "You must install the NetProbe Root Certificate in your Android System settings.")
+        GuideItem("2", "Bypass Pinning", "Many apps use 'Certificate Pinning'. You may need a rooted device or a modified APK to see their traffic.")
+        GuideItem("3", "Enable MITM", "Toggle the 'SSL Decryption' switch in the app settings (Coming Soon).")
+        
+        Spacer(modifier = Modifier.height(24.dp))
+        
+        Button(
+            onClick = { /* TODO: Download CA */ },
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
+        ) {
+            Icon(Icons.Default.Download, contentDescription = null)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Download Root CA (.crt)")
         }
-        DecryptionStatus.NOT_ENCRYPTED -> {
-            Text("Traffic is not encrypted. Use 'Parsed' or 'Raw' view.")
+    }
+}
+
+@Composable
+fun GuideItem(step: String, title: String, description: String) {
+    Row(modifier = Modifier.padding(vertical = 8.dp)) {
+        Surface(
+            shape = androidx.compose.foundation.shape.CircleShape,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(24.dp)
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Text(step, color = Color.White, style = MaterialTheme.typography.labelLarge)
+            }
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        Column {
+            Text(title, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+            Text(description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
