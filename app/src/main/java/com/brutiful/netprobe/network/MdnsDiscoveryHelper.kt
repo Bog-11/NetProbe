@@ -12,6 +12,8 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withTimeoutOrNull
 
+import com.brutiful.netprobe.util.NetworkUtils
+
 class MdnsDiscoveryHelper(context: Context) {
     private val TAG = "MdnsDiscovery"
     private val nsdManager = context.getSystemService(Context.NSD_SERVICE) as NsdManager
@@ -54,7 +56,9 @@ class MdnsDiscoveryHelper(context: Context) {
 
                     override fun onServiceResolved(resolvedInfo: NsdServiceInfo) {
                         val ip = resolvedInfo.host.hostAddress
-                        val hostName = resolvedInfo.host.hostName
+                        val rawHostName = resolvedInfo.host.hostName
+                        val cleanHostName = NetworkUtils.sanitizeHostName(rawHostName)
+                        val cleanServiceName = NetworkUtils.sanitizeHostName(resolvedInfo.serviceName) ?: resolvedInfo.serviceName.takeIf { it.isNotBlank() }
                         
                         val txtRecords = mutableMapOf<String, String>()
                         try {
@@ -70,13 +74,13 @@ class MdnsDiscoveryHelper(context: Context) {
                         
                         val fingerprint = DeviceFingerprint(
                             source = FingerprintSource.MDNS,
-                            friendlyName = resolvedInfo.serviceName,
-                            hostName = if (hostName != ip) hostName else null,
+                            friendlyName = cleanServiceName,
+                            hostName = if (cleanHostName != ip) cleanHostName else null,
                             confidence = 45,
                             rawMetadata = mapOf(
                                 "ip" to ip,
                                 "serviceType" to resolvedInfo.serviceType,
-                                "host" to hostName
+                                "host" to (cleanHostName ?: rawHostName)
                             ) + txtRecords
                         )
                         synchronized(fingerprints) { fingerprints.add(fingerprint) }

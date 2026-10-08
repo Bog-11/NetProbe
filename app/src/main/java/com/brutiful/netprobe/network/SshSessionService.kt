@@ -72,7 +72,8 @@ class SshSessionService : Service() {
 
     private fun showNotification(title: String, content: String) {
         val intent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra("SCREEN", "shell")
         }
         val pendingIntent = PendingIntent.getActivity(
             this, 0, intent,

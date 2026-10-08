@@ -11,6 +11,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -20,8 +21,14 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.brutiful.netprobe.model.BluetoothCategory
 import com.brutiful.netprobe.model.BluetoothDeviceData
+import com.brutiful.netprobe.model.Confidence
+import com.brutiful.netprobe.model.DeviceCategory
 import com.brutiful.netprobe.model.DiscoveredDevice
+import com.brutiful.netprobe.model.DiscoverySource
+import com.brutiful.netprobe.model.PresenceState
+import com.brutiful.netprobe.model.ProximityTargetType
 import com.brutiful.netprobe.viewmodel.DiscoveryStats
 import com.brutiful.netprobe.viewmodel.DiscoveryTab
 import com.brutiful.netprobe.viewmodel.DiscoveryUiState
@@ -58,11 +65,11 @@ fun ScanControlCard(
                 val primaryLabel = if (isAnyScanning) {
                     "Stop Discovery"
                 } else if (state.selectedTab == DiscoveryTab.NETWORK) {
-                    "Scan Network"
+                    "Best-Effort LAN Scan"
                 } else {
                     "Scan Bluetooth"
                 }
-                
+
                 Button(
                     onClick = { if (!isAnyScanning) onStartScan(ScanMode.NORMAL) else onStopScan() },
                     modifier = Modifier.weight(1f),
@@ -80,18 +87,18 @@ fun ScanControlCard(
                     Text(primaryLabel)
                 }
 
-                if (!isAnyScanning) {
-                    var showMenu by remember { mutableStateOf(value = false) }
+                if (!isAnyScanning && state.selectedTab == DiscoveryTab.NETWORK) {
+                    var showMenu by remember { mutableStateOf(false) }
                     Box {
                         IconButton(onClick = { showMenu = true }) {
-                            Icon(Icons.Default.MoreVert, contentDescription = "More options")
+                            Icon(Icons.Default.MoreVert, contentDescription = "More scan options")
                         }
                         DropdownMenu(
                             expanded = showMenu,
                             onDismissRequest = { showMenu = false }
                         ) {
                             DropdownMenuItem(
-                                text = { Text("Normal Scan") },
+                                text = { Text("Fast Best-Effort Discovery") },
                                 onClick = {
                                     showMenu = false
                                     onStartScan(ScanMode.NORMAL)
@@ -99,29 +106,12 @@ fun ScanControlCard(
                                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) }
                             )
                             DropdownMenuItem(
-                                text = { Text("Deep Scan") },
+                                text = { Text("Expanded Subnet Scan") },
                                 onClick = {
                                     showMenu = false
-                                    onStartScan(ScanMode.DEEP)
+                                    onStartScan(ScanMode.EXPANDED)
                                 },
                                 leadingIcon = { Icon(Icons.Default.TravelExplore, contentDescription = null) }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Scan All") },
-                                onClick = {
-                                    showMenu = false
-                                    onScanAll()
-                                },
-                                leadingIcon = { Icon(Icons.Default.AllInclusive, contentDescription = null) }
-                            )
-                            HorizontalDivider()
-                            DropdownMenuItem(
-                                text = { Text("Enrich Existing") },
-                                onClick = {
-                                    showMenu = false
-                                    onEnrich()
-                                },
-                                leadingIcon = { Icon(Icons.Default.AutoFixHigh, contentDescription = null) }
                             )
                         }
                     }
@@ -139,7 +129,7 @@ fun ScanControlCard(
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            text = state.statusMessage ?: "Scanning...",
+                            text = state.statusMessage ?: "Scanning…",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -156,6 +146,42 @@ fun ScanControlCard(
                     text = "Ready to scan",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun SubnetCoverageNoticeCard(
+    coverageText: String?,
+    warningNotice: String?,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+        ),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            coverageText?.let {
+                Text(
+                    text = "Subnet Coverage: $it",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            warningNotice?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
                 )
             }
         }
@@ -222,9 +248,189 @@ private fun DiscoverySummaryItem(label: String, value: String, icon: ImageVector
 
 @Composable
 fun DeviceResultRow(
-    name: String,
-    metadata: String,
-    isReachable: Boolean,
+    device: DiscoveredDevice,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val presenceColor = when (device.presenceState) {
+        PresenceState.CONFIRMED_ACTIVE,
+        PresenceState.DISCOVERED_BY_MULTICAST -> MaterialTheme.colorScheme.primary
+        PresenceState.ROUTER_REPORTED -> Color(0xFF4CAF50)
+        PresenceState.PREVIOUSLY_SEEN,
+        PresenceState.UNRESPONSIVE_THIS_SCAN -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+        PresenceState.NOT_REACHABLE_FROM_PHONE -> Color(0xFFF44336)
+    }
+
+    val alpha = if (device.presenceState == PresenceState.PREVIOUSLY_SEEN ||
+        device.presenceState == PresenceState.UNRESPONSIVE_THIS_SCAN
+    ) 0.6f else 1.0f
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(10.dp)
+                .clip(CircleShape)
+                .background(presenceColor)
+        )
+
+        Column(modifier = Modifier.weight(1f).alpha(alpha)) {
+            Text(
+                text = device.computedDisplayName(),
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            val metadata = buildString {
+                append(device.ipString)
+                device.manufacturer?.let { append(" • $it") }
+                if (device.sources.isNotEmpty()) {
+                    append(" • ${device.sources.joinToString { it.name }}")
+                }
+            }
+            Text(
+                text = metadata,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+
+        if (device.sources.isNotEmpty()) {
+            Icon(
+                imageVector = when {
+                    device.sources.contains(DiscoverySource.WS_DISCOVERY) -> Icons.Default.Videocam
+                    device.sources.contains(DiscoverySource.MDNS) ||
+                            device.sources.contains(DiscoverySource.SSDP) -> Icons.Default.SettingsInputAntenna
+                    else -> Icons.Default.Wifi
+                },
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                modifier = Modifier.size(16.dp)
+            )
+        }
+
+        Icon(
+            imageVector = Icons.Default.ChevronRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+            modifier = Modifier.size(20.dp)
+        )
+    }
+}
+
+@Composable
+fun getCategoryIcon(category: BluetoothCategory): ImageVector {
+    return when (category) {
+        BluetoothCategory.IPHONE -> Icons.Default.Smartphone
+        BluetoothCategory.ANDROID -> Icons.Default.Android
+        BluetoothCategory.WINDOWS -> Icons.Default.Computer
+        BluetoothCategory.LINUX -> Icons.Default.Terminal
+        BluetoothCategory.AUDIO -> Icons.Default.Headphones
+        BluetoothCategory.WEARABLE -> Icons.Default.Watch
+        BluetoothCategory.OTHER -> Icons.Default.Bluetooth
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun BluetoothCategorySummaryCard(
+    bluetoothDevices: List<BluetoothDeviceData>,
+    selectedCategory: BluetoothCategory?,
+    onSelectCategory: (BluetoothCategory?) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val categoryCounts = remember(bluetoothDevices) {
+        bluetoothDevices.groupingBy { it.category }.eachCount()
+    }
+
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceColorAtElevation(1.dp)
+        ),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Discovered Device Types",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                if (selectedCategory != null) {
+                    TextButton(
+                        onClick = { onSelectCategory(null) },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                    ) {
+                        Text("Show All (${bluetoothDevices.size})", style = MaterialTheme.typography.labelSmall)
+                    }
+                } else {
+                    Text(
+                        text = "${bluetoothDevices.size} total",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                BluetoothCategory.entries.forEach { cat ->
+                    val count = categoryCounts[cat] ?: 0
+                    val isSelected = selectedCategory == cat
+
+                    FilterChip(
+                        selected = isSelected,
+                        onClick = {
+                            if (isSelected) onSelectCategory(null) else onSelectCategory(cat)
+                        },
+                        label = {
+                            Text(
+                                text = "${cat.displayName}: $count",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = if (isSelected || count > 0) FontWeight.Bold else FontWeight.Normal
+                            )
+                        },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = getCategoryIcon(cat),
+                                contentDescription = null,
+                                modifier = Modifier.size(14.dp)
+                            )
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            containerColor = if (count > 0) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f),
+                            labelColor = if (count > 0) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                        )
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun BluetoothDeviceResultRow(
+    device: BluetoothDeviceData,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -240,19 +446,48 @@ fun DeviceResultRow(
             modifier = Modifier
                 .size(10.dp)
                 .clip(CircleShape)
-                .background(if (isReachable) MaterialTheme.colorScheme.primary else Color(0xFFF44336))
+                .background(MaterialTheme.colorScheme.primary)
         )
 
         Column(modifier = Modifier.weight(1f)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = device.displayName(),
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                    shape = RoundedCornerShape(4.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = getCategoryIcon(device.category),
+                            contentDescription = null,
+                            modifier = Modifier.size(12.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = device.category.shortName,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
+                }
+            }
             Text(
-                text = name,
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                text = metadata,
+                text = "${device.address} • ${device.type} • ${device.rssi} dBm",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
@@ -296,7 +531,7 @@ fun DiscoveryEmptyState(
                 tint = MaterialTheme.colorScheme.primary
             )
         }
-        
+
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(
                 text = title,
@@ -310,7 +545,7 @@ fun DiscoveryEmptyState(
                 textAlign = TextAlign.Center
             )
         }
-        
+
         Button(onClick = onAction) {
             Text(actionLabel)
         }
@@ -323,7 +558,8 @@ fun DeviceDetailBottomSheet(
     device: Any?,
     onDismiss: () -> Unit,
     onProbe: (DiscoveredDevice) -> Unit = {},
-    onSsh: (DiscoveredDevice) -> Unit = {}
+    onSsh: (DiscoveredDevice) -> Unit = {},
+    onStartTrackingLive: (String, ProximityTargetType, String) -> Unit = { _, _, _ -> }
 ) {
     if (device == null) return
 
@@ -341,20 +577,21 @@ fun DeviceDetailBottomSheet(
             when (device) {
                 is DiscoveredDevice -> {
                     DiscoveryDeviceHeader(
-                        title = device.displayName(),
-                        subtitle = device.ipAddress,
+                        title = device.computedDisplayName(),
+                        subtitle = device.ipString,
                         icon = Icons.Default.Lan
                     )
-                    
+
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        DiscoveryDetailItem("MAC Address", device.macAddress ?: "Unknown")
-                        DiscoveryDetailItem("Manufacturer", device.manufacturer ?: "Unknown")
-                        DiscoveryDetailItem("Host Name", device.hostName ?: "N/A")
+                        DiscoveryDetailItem("IP Address", device.ipString)
+                        device.macAddress?.let { DiscoveryDetailItem("MAC Address", it) }
+                        device.hostname?.let { DiscoveryDetailItem("Hostname", it) }
                         if (device.openPorts.isNotEmpty()) {
                             DiscoveryDetailItem("Open Ports", device.openPorts.joinToString(", "))
                         }
-                        if (device.evidence.isNotEmpty()) {
-                            DiscoveryDetailItem("Fingerprint", device.getEvidenceSummary())
+                        DiscoveryDetailItem("Evidence Summary", device.evidenceSummary())
+                        if (device.notes.isNotEmpty()) {
+                            DiscoveryDetailItem("Notes", device.notes.joinToString("; "))
                         }
                     }
 
@@ -376,7 +613,7 @@ fun DeviceDetailBottomSheet(
                             onClick = { onProbe(device); onDismiss() },
                             modifier = Modifier.weight(1f)
                         ) {
-                            Icon(Icons.Default.Search, contentDescription = null)
+                            Icon(Icons.Default.ManageSearch, contentDescription = null)
                             Spacer(modifier = Modifier.width(8.dp))
                             Text("Probe")
                         }
@@ -388,13 +625,33 @@ fun DeviceDetailBottomSheet(
                         subtitle = device.address,
                         icon = Icons.Default.Bluetooth
                     )
-                    
+
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        DiscoveryDetailItem("Type", device.type)
-                        DiscoveryDetailItem("Vendor", device.vendor ?: "Unknown")
-                        DiscoveryDetailItem("Class", device.deviceClass ?: "N/A")
-                        DiscoveryDetailItem("Status", device.bondState)
-                        DiscoveryDetailItem("Signal", "${device.rssi} dBm")
+                        DiscoveryDetailItem("Address", device.address)
+                        DiscoveryDetailItem("Device Type", device.type)
+                        DiscoveryDetailItem("Signal Strength", "${device.rssi} dBm")
+                        device.vendor?.let { DiscoveryDetailItem("Vendor", it) }
+                        device.categoryLabel?.let { DiscoveryDetailItem("Category", it) }
+                        DiscoveryDetailItem("Bond State", device.bondState)
+                        if (device.evidenceList.isNotEmpty()) {
+                            DiscoveryDetailItem("Evidence", device.evidenceList.joinToString("; "))
+                        }
+                    }
+
+                    Button(
+                        onClick = {
+                            onStartTrackingLive(
+                                device.address,
+                                ProximityTargetType.BLE_DEVICE,
+                                device.displayName()
+                            )
+                            onDismiss()
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.Radar, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Live Signal Tracking")
                     }
                 }
             }
@@ -403,13 +660,17 @@ fun DeviceDetailBottomSheet(
 }
 
 @Composable
-private fun DiscoveryDeviceHeader(title: String, subtitle: String, icon: ImageVector) {
+private fun DiscoveryDeviceHeader(
+    title: String,
+    subtitle: String,
+    icon: ImageVector
+) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         Surface(
-            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f),
+            color = MaterialTheme.colorScheme.primaryContainer,
             shape = CircleShape,
             modifier = Modifier.size(48.dp)
         ) {
@@ -417,20 +678,19 @@ private fun DiscoveryDeviceHeader(title: String, subtitle: String, icon: ImageVe
                 imageVector = icon,
                 contentDescription = null,
                 modifier = Modifier.padding(12.dp),
-                tint = MaterialTheme.colorScheme.primary
+                tint = MaterialTheme.colorScheme.onPrimaryContainer
             )
         }
         Column {
             Text(
                 text = title,
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.ExtraBold
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold
             )
             Text(
                 text = subtitle,
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontFamily = FontFamily.Monospace
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }
@@ -438,17 +698,61 @@ private fun DiscoveryDeviceHeader(title: String, subtitle: String, icon: ImageVe
 
 @Composable
 private fun DiscoveryDetailItem(label: String, value: String) {
-    Column {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
         Text(
-            text = label.uppercase(),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.primary,
-            fontWeight = FontWeight.Bold
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Text(
             text = value,
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurface
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface,
+            textAlign = TextAlign.End,
+            modifier = Modifier.widthIn(max = 220.dp)
+        )
+    }
+}
+
+@Composable
+fun DiscoveryDiagnosticsCard(stats: DiscoveryStats) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+        ),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            horizontalArrangement = Arrangement.SpaceAround
+        ) {
+            DiagnosticCount("mDNS", stats.mdnsCount)
+            DiagnosticCount("SSDP", stats.ssdpCount)
+            DiagnosticCount("WS-Disc", stats.wsDiscoveryCount)
+            DiagnosticCount("TCP", stats.tcpProbeCount)
+        }
+    }
+}
+
+@Composable
+private fun DiagnosticCount(label: String, count: Int) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+            text = count.toString(),
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }
@@ -462,91 +766,4 @@ private fun formatDuration(seconds: Int): String {
 private fun formatTimestamp(timestamp: Long): String {
     val sdf = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
     return sdf.format(Date(timestamp))
-}
-
-@Composable
-fun DiscoveryDiagnosticsCard(stats: DiscoveryStats) {
-    var infoToShow by remember { mutableStateOf<Pair<String, String>?>(null) }
-
-    ElevatedCard(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.elevatedCardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
-        )
-    ) {
-        Column(modifier = Modifier.padding(12.dp)) {
-            Text(
-                text = "Discovery Sources",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                DiagnosticItem("ICMP", stats.icmpCount) {
-                    infoToShow = "ICMP" to "Internet Control Message Protocol. Used for 'ping' to check if a device is online and responding."
-                }
-                DiagnosticItem("TCP", stats.tcpProbeCount) {
-                    infoToShow = "TCP" to "Transmission Control Protocol. Probes common web and service ports to find devices that might block ping."
-                }
-                DiagnosticItem("ARP", stats.arpCount) {
-                    infoToShow = "ARP" to "Address Resolution Protocol. Maps IP addresses to MAC addresses by reading the local device's network cache."
-                }
-                DiagnosticItem("mDNS", stats.mdnsCount) {
-                    infoToShow = "mDNS" to "Multicast DNS (Bonjour). Discovers services like printers, Chromecasts, and Apple devices using broadcast names."
-                }
-                DiagnosticItem("SSDP", stats.ssdpCount) {
-                    infoToShow = "SSDP" to "Simple Service Discovery Protocol. Used by UPnP to find smart TVs, media servers, and network routers."
-                }
-                DiagnosticItem("ONVIF", stats.onvifCount) {
-                    infoToShow = "ONVIF" to "Open Network Video Interface Forum. Specialized protocol used to discover and identify IP security cameras."
-                }
-            }
-        }
-    }
-
-    if (infoToShow != null) {
-        AlertDialog(
-            onDismissRequest = { infoToShow = null },
-            title = { Text(infoToShow!!.first) },
-            text = { Text(infoToShow!!.second) },
-            confirmButton = {
-                TextButton(onClick = { infoToShow = null }) {
-                    Text("Close")
-                }
-            }
-        )
-    }
-}
-
-@Composable
-private fun DiagnosticItem(label: String, count: Int, onInfoClick: () -> Unit) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(
-            text = count.toString(),
-            style = MaterialTheme.typography.bodyLarge,
-            fontWeight = FontWeight.Bold,
-            color = if (count > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-        )
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.clickable { onInfoClick() }
-        ) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(modifier = Modifier.width(2.dp))
-            Icon(
-                imageVector = Icons.Default.Info,
-                contentDescription = "Info",
-                modifier = Modifier.size(10.dp),
-                tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
-            )
-        }
-    }
 }

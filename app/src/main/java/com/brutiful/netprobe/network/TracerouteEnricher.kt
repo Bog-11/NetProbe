@@ -2,6 +2,7 @@ package com.brutiful.netprobe.network
 
 import com.brutiful.netprobe.model.HopEnrichment
 import com.brutiful.netprobe.model.TargetType
+import com.brutiful.netprobe.util.NetworkUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.net.InetAddress
@@ -20,7 +21,8 @@ object TracerouteEnricher {
         }
 
         val hostname = try {
-            InetAddress.getByName(ip).hostName.let { if (it == ip) null else it }
+            val rawHost = InetAddress.getByName(ip).hostName
+            if (rawHost == ip) null else NetworkUtils.sanitizeHostName(rawHost)
         } catch (_: Exception) { null }
 
         val whois = WhoisClient.fetchReport(ip)

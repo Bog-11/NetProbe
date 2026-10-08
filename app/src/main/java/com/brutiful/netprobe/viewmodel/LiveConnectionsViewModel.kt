@@ -18,6 +18,7 @@ import kotlinx.coroutines.withContext
 
 class LiveConnectionsViewModel : ViewModel() {
     val activeConnections = ConnectionTracker.activeConnections
+    val appTrafficStats = ConnectionTracker.appTrafficStats
 
     private val _exportStatus = MutableStateFlow<ExportStatus?>(null)
     val exportStatus: StateFlow<ExportStatus?> = _exportStatus.asStateFlow()

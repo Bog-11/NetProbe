@@ -178,8 +178,8 @@ private fun DeviceInfoPanel(device: DiscoveredDevice) {
             Spacer(modifier = Modifier.height(8.dp))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Column(modifier = Modifier.weight(1f)) {
-                    InfoItem("Hostname", device.hostName ?: device.displayName())
-                    InfoItem("IP Address", device.ipAddress)
+                    InfoItem("Hostname", device.hostname ?: device.computedDisplayName())
+                    InfoItem("IP Address", device.ipString)
                 }
                 Column(modifier = Modifier.weight(1f)) {
                     InfoItem("Vendor", device.vendorName ?: "Unknown")

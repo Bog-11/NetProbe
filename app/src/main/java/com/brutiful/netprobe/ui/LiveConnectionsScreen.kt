@@ -8,6 +8,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -23,7 +24,7 @@ import com.brutiful.netprobe.network.ConnectionTracker
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.ui.text.font.FontWeight
 import com.brutiful.netprobe.network.ExportMode
-import com.brutiful.netprobe.network.NetworkUtils
+import com.brutiful.netprobe.util.NetworkUtils
 import com.brutiful.netprobe.ui.theme.MatrixPurple
 import com.brutiful.netprobe.ui.theme.MatrixRed
 import com.brutiful.netprobe.viewmodel.ExportStatus
@@ -42,13 +43,28 @@ fun LiveConnectionsScreen(
     onToggleVpn: () -> Unit,
     onConnectionClick: (LiveConnection) -> Unit,
     onProbeClick: (LiveConnection) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    filterUid: Int? = null,
+    onBack: (() -> Unit)? = null,
+    title: String? = null
 ) {
-    val connections by viewModel.activeConnections.collectAsState(initial = emptyList())
+    val rawConnections by viewModel.activeConnections.collectAsState(initial = emptyList())
+    val connections = remember(rawConnections, filterUid) {
+        if (filterUid != null) rawConnections.filter { it.uid == filterUid }
+        else rawConnections
+    }
+    
+    // Use provided title, or find app info for the title if filtered
+    val headerTitle = remember(connections, filterUid, title) {
+        title ?: if (filterUid != null && connections.isNotEmpty()) {
+            connections.first().appLabel
+        } else "Live Traffic Monitor"
+    }
+
     val exportStatus by viewModel.exportStatus.collectAsState()
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
-    val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+    val timeFormat = remember { SimpleDateFormat("HH:mm:ss", Locale.getDefault()) }
 
     var showExportChooser by remember { mutableStateOf(false) }
     var showExportInfo by remember { mutableStateOf<ExportMode?>(null) }
@@ -153,13 +169,26 @@ fun LiveConnectionsScreen(
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                if (onBack != null) {
+                    IconButton(
+                        onClick = onBack,
+                        modifier = Modifier.padding(end = 8.dp)
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+
                 Text(
-                    text = "Live Traffic Monitor",
+                    text = headerTitle,
                     style = MaterialTheme.typography.headlineMedium,
-                    color = MaterialTheme.colorScheme.primary
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.weight(1f)
                 )
                 
                 Row {

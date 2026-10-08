@@ -75,6 +75,7 @@ interface PortInfoDao {
 }
 
 @Database(entities = [ConnectionHistory::class, DeviceIdentity::class, LiveConnection::class, PortInfo::class], version = 4, exportSchema = false)
+@TypeConverters(Converters::class)
 abstract class HistoryDatabase : RoomDatabase() {
     abstract fun historyDao(): HistoryDao
     abstract fun deviceIdentityDao(): DeviceIdentityDao

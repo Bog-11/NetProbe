@@ -1,12 +1,12 @@
 package com.brutiful.netprobe.network
 
 import android.content.Context
-import android.net.ConnectivityManager
-import android.os.Build
+import com.brutiful.netprobe.model.AppTrafficStats
 import com.brutiful.netprobe.model.ConnectionHistory
 import com.brutiful.netprobe.model.ConnectionStatus
 import com.brutiful.netprobe.model.LiveConnection
 import com.brutiful.netprobe.util.NetProbeLog
+import com.brutiful.netprobe.util.NetworkUtils
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import java.net.InetAddress
@@ -42,6 +42,29 @@ object ConnectionTracker {
             }
             .stateIn(scope, SharingStarted.Eagerly, emptyList())
 
+    val appTrafficStats: StateFlow<List<AppTrafficStats>> =
+        activeConnections.map { connections ->
+            connections.groupBy { it.uid }.map { (uid, conns) ->
+                val first = conns.first()
+                AppTrafficStats(
+                    packageName = first.packageName,
+                    packageNames = first.packageNames,
+                    appLabel = first.appLabel,
+                    uid = uid,
+                    activeConnections = conns.count { it.status == ConnectionStatus.ACTIVE },
+                    totalConnections = conns.size,
+                    sentBytes = conns.sumOf { it.sentBytes },
+                    receivedBytes = conns.sumOf { it.receivedBytes },
+                    lastSeen = conns.maxOf { it.lastSeen },
+                    resolutionReason = first.resolutionReason
+                )
+            }.sortedWith(
+                compareByDescending<AppTrafficStats> { it.activeConnections > 0 }
+                    .thenByDescending { it.activeConnections }
+                    .thenByDescending { it.lastSeen }
+            )
+        }.stateIn(scope, SharingStarted.Eagerly, emptyList())
+
     val trackedCount: Int get() = connectionMap.size
     
     private val hostNameCache = ConcurrentHashMap<String, String>()
@@ -62,9 +85,10 @@ object ConnectionTracker {
     }
 
     fun init(context: Context) {
-        appContext = context.applicationContext
-        database = HistoryDatabase.getDatabase(context)
-        ownerResolver = ConnectionOwnerResolver(context)
+        val app = context.applicationContext
+        appContext = app
+        database = HistoryDatabase.getDatabase(app)
+        ownerResolver = ConnectionOwnerResolver(app)
         
         scope.launch {
             val saved = database?.liveConnectionDao()?.getAll() ?: emptyList()
@@ -163,18 +187,15 @@ object ConnectionTracker {
         val live = connectionMap.compute(flowKey) { _, existing ->
             if (existing == null) {
                 isNew = true
-                val uid = getOwnerUid(protocol, srcIp, srcPort, destIp, destPort)
-                val cachedMetadata = if (uid != -1) ownerResolver?.getCachedMetadata(uid) else null
-                val initialLabel = cachedMetadata?.label ?: if (uid != -1) "Resolving..." else "Unknown app"
                 
                 LiveConnection(
                     id = flowKey,
                     destinationIp = destIp,
                     destinationPort = destPort,
                     protocol = protocol,
-                    uid = uid,
-                    packageName = cachedMetadata?.packageName,
-                    appLabel = initialLabel,
+                    uid = -1,
+                    packageName = null,
+                    appLabel = "Resolving...",
                     destinationHost = hostNameCache[destIp],
                     firstSeen = now,
                     lastSeen = now,
@@ -183,8 +204,8 @@ object ConnectionTracker {
                     totalPackets = 1,
                     status = ConnectionStatus.ACTIVE
                 ).also {
-                    // Start async resolution. It handles retries if uid is -1.
-                    resolveMetadataAsync(flowKey, uid, protocol, srcIp, srcPort, destIp, destPort)
+                    // Start async resolution.
+                    resolveMetadataAsync(flowKey, protocol, srcIp, srcPort, destIp, destPort)
                 }
             } else {
                 existing.copy(
@@ -226,75 +247,57 @@ object ConnectionTracker {
         }
     }
 
-    private fun getOwnerUid(protocol: String, srcIp: String?, srcPort: Int, destIp: String, destPort: Int): Int {
-        if (srcIp == null) return -1
-        return try {
-            val protoNum = if (protocol == "TCP") 6 else 17
-            val srcAddr = InetAddress.getByName(srcIp)
-            val destAddr = InetAddress.getByName(destIp)
-            ownerResolver?.getOwnerUid(protoNum, srcAddr, srcPort, destAddr, destPort) ?: -1
-        } catch (e: Exception) {
-            -1
-        }
-    }
-
     private fun resolveMetadataAsync(
         flowKey: String,
-        initialUid: Int,
-        protocol: String? = null,
-        srcIp: String? = null,
-        srcPort: Int = 0,
-        destIp: String? = null,
-        destPort: Int = 0
+        protocol: String,
+        srcIp: String?,
+        srcPort: Int,
+        destIp: String,
+        destPort: Int
     ) {
         if (pendingMetadataResolutions.containsKey(flowKey)) return
 
         val job = scope.launch {
             try {
-                var currentUid = initialUid
+                if (srcIp == null) return@launch
+                val protoNum = if (protocol == "TCP") 6 else 17
+                val srcAddr = InetAddress.getByName(srcIp)
+                val destAddr = InetAddress.getByName(destIp)
+                
+                val uid = ownerResolver?.getOwnerUidWithRetry(protoNum, srcAddr, srcPort, destAddr, destPort) ?: -1
 
-                // If UID is unknown, try a few retries with delays (Experimental fallback)
-                if (currentUid == -1 && protocol != null && srcIp != null && destIp != null) {
-                    val retryDelays = listOf(500L, 1000L)
-                    for (delayMs in retryDelays) {
-                        delay(delayMs)
-                        currentUid = getOwnerUid(protocol, srcIp, srcPort, destIp, destPort)
-                        if (currentUid != -1) {
-                            NetProbeLog.d("ConnectionTracker", "Late UID resolution success: $currentUid for $flowKey")
-                            break
-                        }
-                    }
-                }
-
-                if (currentUid != -1) {
+                if (uid != -1) {
                     val metadata = withTimeoutOrNull(5000) {
-                        ownerResolver?.resolveMetadata(currentUid)
+                        ownerResolver?.resolveMetadata(uid)
                     }
 
                     if (metadata != null) {
                         connectionMap.computeIfPresent(flowKey) { _, existing ->
                             existing.copy(
-                                uid = currentUid,
-                                packageName = metadata.packageName,
-                                appLabel = metadata.label
+                                uid = uid,
+                                packageName = metadata.packageNames.firstOrNull(),
+                                packageNames = metadata.packageNames,
+                                appLabel = metadata.label,
+                                resolutionReason = metadata.resolutionReason
                             ).also { updated ->
                                 persistenceQueue.trySend(PersistenceAction.UpdateLive(updated))
                             }
                         }
                         structuralUpdates.emit(Unit)
-                    } else {
-                        connectionMap.computeIfPresent(flowKey) { _, existing ->
-                            if (existing.appLabel == "Resolving...") {
-                                existing.copy(uid = currentUid, appLabel = "UID $currentUid").also { updated ->
-                                    persistenceQueue.trySend(PersistenceAction.UpdateLive(updated))
-                                }
-                            } else existing
-                        }
-                        structuralUpdates.emit(Unit)
                     }
+                } else {
+                    connectionMap.computeIfPresent(flowKey) { _, existing ->
+                        existing.copy(
+                            appLabel = "Unknown app",
+                            resolutionReason = "OWNER_UID_UNAVAILABLE"
+                        ).also { updated ->
+                            persistenceQueue.trySend(PersistenceAction.UpdateLive(updated))
+                        }
+                    }
+                    structuralUpdates.emit(Unit)
                 }
             } catch (e: Exception) {
-                NetProbeLog.e("ConnectionTracker", "Async metadata resolution failed")
+                NetProbeLog.e("ConnectionTracker", "Async metadata resolution failed: ${e.message}")
             } finally {
                 pendingMetadataResolutions.remove(flowKey)
             }
@@ -305,8 +308,9 @@ object ConnectionTracker {
     private fun resolveHostName(ip: String) {
         scope.launch {
             try {
-                val host = InetAddress.getByName(ip).hostName
-                if (host != ip) {
+                val rawHost = InetAddress.getByName(ip).hostName
+                val host = if (rawHost != ip) NetworkUtils.sanitizeHostName(rawHost) ?: rawHost else null
+                if (host != null && host != ip) {
                     hostNameCache[ip] = host
                     var changed = false
                     connectionMap.forEach { (key, conn) ->

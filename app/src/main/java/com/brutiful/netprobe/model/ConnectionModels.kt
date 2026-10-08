@@ -16,6 +16,7 @@ data class LiveConnection(
     val protocol: String,
     val uid: Int = -1,
     val packageName: String? = null,
+    val packageNames: List<String> = emptyList(),
     val appLabel: String = "Unknown app",
     val destinationHost: String? = null,
     val firstSeen: Long = System.currentTimeMillis(),
@@ -23,7 +24,8 @@ data class LiveConnection(
     val sentBytes: Long = 0,
     val receivedBytes: Long = 0,
     val totalPackets: Int = 0,
-    val status: ConnectionStatus = ConnectionStatus.ACTIVE
+    val status: ConnectionStatus = ConnectionStatus.ACTIVE,
+    val resolutionReason: String? = null
 ) {
     val totalBytes: Long get() = sentBytes + receivedBytes
     val isActive: Boolean get() = status == ConnectionStatus.ACTIVE
@@ -45,3 +47,18 @@ data class ConnectionHistory(
     val sentBytes: Long,
     val receivedBytes: Long
 )
+
+data class AppTrafficStats(
+    val packageName: String?,
+    val packageNames: List<String>,
+    val appLabel: String,
+    val uid: Int,
+    val activeConnections: Int,
+    val totalConnections: Int,
+    val sentBytes: Long,
+    val receivedBytes: Long,
+    val lastSeen: Long,
+    val resolutionReason: String? = null
+) {
+    val totalBytes: Long get() = sentBytes + receivedBytes
+}

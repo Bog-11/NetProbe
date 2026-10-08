@@ -1,9 +1,8 @@
-package com.brutiful.netprobe.ui
+package com.brutiful.netprobe.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.brutiful.netprobe.model.CapturedPacket
-import com.brutiful.netprobe.model.LiveConnection
 import com.brutiful.netprobe.network.PacketRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow

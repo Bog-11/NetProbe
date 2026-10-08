@@ -11,6 +11,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.*
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -26,8 +27,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.brutiful.netprobe.model.*
 import com.brutiful.netprobe.network.HexDumpFormatter
-import com.brutiful.netprobe.network.NetworkUtils
 import com.brutiful.netprobe.network.PacketParser
+import com.brutiful.netprobe.util.NetworkUtils
 import kotlinx.coroutines.launch
 import java.nio.charset.StandardCharsets
 import java.text.SimpleDateFormat
@@ -39,11 +40,11 @@ fun AppTrafficDetailScreen(
     connection: LiveConnection,
     packets: List<CapturedPacket>,
     onBack: () -> Unit,
-    onProbe: (LiveConnection) -> Unit
+    onProbe: (LiveConnection) -> Unit,
 ) {
     var selectedPacket by remember { mutableStateOf<CapturedPacket?>(null) }
     var filterText by remember { mutableStateOf("") }
-    val timeFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault())
+    val timeFormat = remember { SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault()) }
     val snackbarHostState = remember { SnackbarHostState() }
 
     val filteredPackets = packets.filter {
@@ -66,7 +67,7 @@ fun AppTrafficDetailScreen(
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
                 actions = {
@@ -249,7 +250,7 @@ fun PacketDetailDialog(
     onDismiss: () -> Unit,
     snackbarHostState: SnackbarHostState
 ) {
-    var selectedTab by remember { mutableStateOf(0) }
+    var selectedTab by remember { mutableIntStateOf(0) }
     val tabs = listOf("Overview", "Raw", "Parsed", "Decrypted")
     val scope = rememberCoroutineScope()
 
@@ -331,7 +332,8 @@ fun PacketOverview(packet: CapturedPacket) {
         Text("Packet Details", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), thickness = 0.5.dp)
         
-        DetailItem("Time Captured", SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault()).format(Date(packet.timestamp)))
+        val timeFormat = remember { SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault()) }
+        DetailItem("Time Captured", timeFormat.format(Date(packet.timestamp)))
         DetailItem("Total Size", "${packet.length} bytes")
         DetailItem("Brief Summary", packet.summary)
     }
@@ -460,7 +462,7 @@ fun PacketRawView(bytes: ByteArray, onNotify: (String) -> Unit) {
                                     text = "ASCII",
                                     fontFamily = FontFamily.Monospace,
                                     fontSize = 9.sp,
-                                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                                    fontWeight = FontWeight.Bold,
                                     color = Color.White.copy(alpha = 0.6f)
                                 )
                             }
@@ -470,7 +472,7 @@ fun PacketRawView(bytes: ByteArray, onNotify: (String) -> Unit) {
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .background(if (index % 2 == 0) Color.Transparent else Color.White.copy(alpha = 0.05f))
+                                    .background(if ((index % 2) == 0) Color.Transparent else Color.White.copy(alpha = 0.05f))
                                     .padding(vertical = 1.dp)
                             ) {
                                 Text(
@@ -550,11 +552,12 @@ fun PacketDecryptedView(packet: CapturedPacket) {
     val metadata = PacketParser.parsePacket(packet)
     val status = metadata["_decryption_status"] ?: packet.decryptionStatus.name
     val bytes = packet.rawBytes
+    val clipboardManager = LocalClipboardManager.current
     
     // Calculate payload offset
     val ihl = (bytes[0].toInt() and 0x0F) * 4
     var payloadOffset = ihl
-    if (packet.protocol == "TCP" && bytes.size >= ihl + 20) {
+    if (packet.protocol == "TCP" && (bytes.size >= ihl + 20)) {
         payloadOffset += ((bytes[ihl + 12].toInt() shr 4) and 0x0F) * 4
     } else if (packet.protocol == "UDP") {
         payloadOffset += 8
@@ -565,14 +568,16 @@ fun PacketDecryptedView(packet: CapturedPacket) {
     Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
         when {
             packet.decryptionStatus == DecryptionStatus.DECRYPTED -> {
-                Text(
-                    String(packet.decryptedPayload ?: byteArrayOf(), StandardCharsets.UTF_8),
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp
-                )
+                SelectionContainer {
+                    Text(
+                        String(packet.decryptedPayload ?: byteArrayOf(), StandardCharsets.UTF_8),
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp
+                    )
+                }
             }
             status == "ENCRYPTED_NOT_DECRYPTED" -> {
-                EncryptionGuide(packet)
+                EncryptionWarning(packet)
             }
             else -> {
                 // Try smart decoding for plaintext
@@ -582,10 +587,22 @@ fun PacketDecryptedView(packet: CapturedPacket) {
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)),
                         modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp)
                     ) {
-                        Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.AutoFixHigh, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Smart-Decoded Content", style = MaterialTheme.typography.labelMedium)
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.AutoFixHigh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Smart-Decoded Content", style = MaterialTheme.typography.labelMedium)
+                            }
+                            IconButton(
+                                onClick = { clipboardManager.setText(AnnotatedString(decoded)) },
+                                modifier = Modifier.size(24.dp)
+                            ) {
+                                Icon(Icons.Default.ContentCopy, contentDescription = "Copy", modifier = Modifier.size(16.dp))
+                            }
                         }
                     }
                     SelectionContainer {
@@ -605,7 +622,7 @@ fun PacketDecryptedView(packet: CapturedPacket) {
                             Icon(Icons.Default.LockOpen, contentDescription = null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
                             Spacer(modifier = Modifier.height(16.dp))
                             Text(
-                                "Traffic is not encrypted.\nNo special encoding (JSON/Base64) detected.\nCheck 'Parsed' tab for details.",
+                                "Traffic is not encrypted.\nNo special encoding (JSON/Base64/Gzip) detected.\nCheck 'Parsed' tab for details.",
                                 textAlign = TextAlign.Center,
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -619,7 +636,7 @@ fun PacketDecryptedView(packet: CapturedPacket) {
 }
 
 @Composable
-fun EncryptionGuide(packet: CapturedPacket) {
+fun EncryptionWarning(packet: CapturedPacket) {
     Column {
         Card(
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.1f)),
@@ -632,7 +649,7 @@ fun EncryptionGuide(packet: CapturedPacket) {
                 Column {
                     Text("Traffic is Encrypted", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.error)
                     Text(
-                        "This connection uses ${if (packet.destinationPort == 443) "HTTPS/TLS" else "an encrypted protocol"}. The contents cannot be read without a Man-in-the-Middle (MITM) setup.",
+                        "This connection uses ${if (packet.destinationPort == 443) "HTTPS/TLS" else "an encrypted protocol"}. The contents are protected and cannot be read without session-specific decryption keys.",
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
@@ -641,44 +658,14 @@ fun EncryptionGuide(packet: CapturedPacket) {
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        Text("How to decrypt this?", style = MaterialTheme.typography.titleMedium)
+        Text("Deep Analysis", style = MaterialTheme.typography.titleMedium)
         Spacer(modifier = Modifier.height(8.dp))
         
-        GuideItem("1", "Install Root CA", "You must install the NetProbe Root Certificate in your Android System settings.")
-        GuideItem("2", "Bypass Pinning", "Many apps use 'Certificate Pinning'. You may need a rooted device or a modified APK to see their traffic.")
-        GuideItem("3", "Enable MITM", "Toggle the 'SSL Decryption' switch in the app settings (Coming Soon).")
-        
-        Spacer(modifier = Modifier.height(24.dp))
-        
-        Button(
-            onClick = { /* TODO: Download CA */ },
-            modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
-        ) {
-            Icon(Icons.Default.Download, contentDescription = null)
-            Spacer(modifier = Modifier.width(8.dp))
-            Text("Download Root CA (.crt)")
-        }
-    }
-}
-
-@Composable
-fun GuideItem(step: String, title: String, description: String) {
-    Row(modifier = Modifier.padding(vertical = 8.dp)) {
-        Surface(
-            shape = androidx.compose.foundation.shape.CircleShape,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(24.dp)
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Text(step, color = Color.White, style = MaterialTheme.typography.labelLarge)
-            }
-        }
-        Spacer(modifier = Modifier.width(12.dp))
-        Column {
-            Text(title, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
-            Text(description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
+        Text(
+            "To view the contents of encrypted traffic, you would need to intercept the session using a Proxy and a Trusted Root Certificate. This app currently supports Layer 4 monitoring only.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 

@@ -60,9 +60,9 @@ class RemoteShellViewModel(application: Application) : AndroidViewModel(applicat
                 launch {
                     svc.connectionState.collect { state ->
                         _connectionState.value = state
-                        _isExecuting.value = (state is SshConnectionState.Connecting || 
-                                              state is SshConnectionState.Authenticating ||
-                                              state is SshConnectionState.OpeningShell)
+                        _isExecuting.value = ((state is SshConnectionState.Connecting) || 
+                                              (state is SshConnectionState.Authenticating) ||
+                                              (state is SshConnectionState.OpeningShell))
                     }
                 }
                 launch {
@@ -100,7 +100,7 @@ class RemoteShellViewModel(application: Application) : AndroidViewModel(applicat
 
     fun prefill(device: DiscoveredDevice) {
         _targetDevice.value = device
-        _host.value = device.ipAddress
+        _host.value = device.ipString
         _port.value = "22"
     }
 
